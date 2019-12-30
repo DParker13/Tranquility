@@ -2,10 +2,11 @@
 using UnityEngine;
 using LibNoise.Generator;
 using System.IO;
+using System.Threading;
 
 public class MapGenerator : MonoBehaviour
 {
-    [Header("Player")]
+    [Header("Player Info")]
     public GameObject player;
 
     [Header("World Name")]
@@ -19,9 +20,6 @@ public class MapGenerator : MonoBehaviour
 
     [Header("Map Options")]
     public bool saveMode = true;
-    public int xOffset;
-    public int yOffset;
-    public float buffer = 0.1f;
 
     [Header("Perlin Noise Options")]
     public Perlin perlin = new Perlin();
@@ -31,6 +29,10 @@ public class MapGenerator : MonoBehaviour
     public float scale = 0.01f;
     public int seed = 102938;
 
+    [Header("Biome Generation Options")]
+    public Perlin biomePerlin = new Perlin();
+    public int biomeSeed = 129038;
+
     [Header("Tree Perlin Noise Options")]
     public Perlin treePerlin = new Perlin();
     public int treeOctaves = 6;
@@ -38,7 +40,6 @@ public class MapGenerator : MonoBehaviour
     public float treePersistance = 1;
 
     [Header("Map Objects")]
-    public int percBush = 10;
     public GameObject[] objects;
 
     [Header("Map Layers")]
@@ -49,7 +50,7 @@ public class MapGenerator : MonoBehaviour
     public float darkGrassLevel = 0.8f;
     public float[] layerHeights;
 
-    [Header("Visualize Map")]
+    [Header("Tiles")]
     public GameObject tilePrefab;
 
     [Header("Map Sprites")]
@@ -59,44 +60,176 @@ public class MapGenerator : MonoBehaviour
     public Texture2D sandTexture;
     public Sprite waterTexture;
 
-    public Dictionary<Vector2, Chunk> chunks;
+    [Header("Chunks")]
+    
+    public int numPooledChunks = 50;
+    public Queue<Chunk> pooledChunks;
+    public Queue<Chunk> chunksAwaitingActivation;
+    public Queue<Chunk> chunksAwaitingDeactivation;
+    public Dictionary<Vector2, Chunk> allChunks;
 
-    void Awake()
-    {
+    [Header("Player Info")]
+    public Vector2Int playerPos;
+
+    //Thread Crap
+    public ThreadStart chunkThreadStart;
+    public Thread chunkThread;
+    public bool threadExecuted = true;
+
+    public Queue<SaveChunk> loadChunkQueue;
+
+    //Private Variables
+    private string persistanceDataPath;
+
+    void Awake() {
+        //Gets the scene controller gameobject
         var sceneController = GameObject.FindGameObjectWithTag("Scene Controller");
 
+        //gets the world name from the scene controller
         worldName = sceneController.GetComponent<SceneController>().worldName;
 
-        //Sets the perlin generator
+        SetWorldInfo();
+
+        //Initiates all lists, queues, and dictionaries
+        pooledChunks = new Queue<Chunk>();
+        allChunks = new Dictionary<Vector2, Chunk>();
+
+        //Thread Queues
+        chunksAwaitingActivation = new Queue<Chunk>();
+        chunksAwaitingDeactivation = new Queue<Chunk>();
+        loadChunkQueue = new Queue<SaveChunk>();
+
+        layerHeights = new float[] { waterLevel, sandLevel, dirtLevel, grassLevel, darkGrassLevel };
+
+        //Loads the chunk pool with empty chunks
+        CreatePooledChunks();
+    }
+
+    public void SetWorldInfo()
+    {
+        //Generates a random seed for the world
+        seed = RandomSeed();
+        biomeSeed = RandomSeed();
+
+        persistanceDataPath = Application.persistentDataPath;
+
+        //Attempts to load previous world data from file
+        if (!worldName.Equals("Main") && saveMode == true)
+        {
+            SaveWorld savedWorld = SaveLoadData.LoadWorld(worldName);
+
+            //Runs if no world was previously saved
+            if (savedWorld == null)
+            {
+                //Saves the world information to file
+                SaveLoadData.SaveWorld(seed, octaves, frequency, persistance, scale, worldName);
+            }
+            else
+            {
+                worldName = savedWorld.worldName;
+                seed = savedWorld.seed;
+                octaves = savedWorld.octaves;
+                frequency = savedWorld.frequency;
+                persistance = savedWorld.persistance;
+                scale = savedWorld.scale;
+            }
+        }
+
+        //--Sets the perlin generators--
+
+        //World
         perlin.Seed = seed;
         perlin.OctaveCount = octaves;
         perlin.Frequency = frequency;
         perlin.Persistence = persistance;
 
-        chunks = new Dictionary<Vector2, Chunk>();
-        layerHeights = new float[] { waterLevel, sandLevel, dirtLevel, grassLevel, darkGrassLevel };
+        //Trees
+        treePerlin.Seed = seed;
+        treePerlin.OctaveCount = treeOctaves;
+        treePerlin.Frequency = treeFrequency;
+        treePerlin.Persistence = treePersistance;
+
+        //Biomes (Heat Map)
+        biomePerlin.Seed = biomeSeed;
+
+        //Biomes (Precipitation)
+
     }
 
-    void Update()
-    {
-        LoadChunksAroundPlayer();
+    void Update() {
+        //Starts the map generation thread
+        ChunkManagementThread();
+
+        //Updates player position for thread use
+        playerPos = GetPlayerPosition();
+
+        //Queued chunks awaiting to be actived or deactivated
+        if(chunksAwaitingActivation.Count > 0)
+        {
+            Chunk dequeuedChunk = chunksAwaitingActivation.Dequeue();
+
+            dequeuedChunk.gameObject.name = "Chunk (" + dequeuedChunk.chunkPos.x + "," + dequeuedChunk.chunkPos.y + ")";
+            dequeuedChunk.UpdateChunk();
+            dequeuedChunk.gameObject.SetActive(true);
+        }
+
+        if (chunksAwaitingDeactivation.Count > 0)
+        {
+            Chunk dequeuedChunk = chunksAwaitingDeactivation.Dequeue();
+
+            dequeuedChunk.PoolAllTiles();
+            dequeuedChunk.gameObject.SetActive(false);
+            pooledChunks.Enqueue(dequeuedChunk);
+        }
+    }
+
+    /*
+     * Starts the chunk loading thread
+     */
+    public void ChunkManagementThread() {
+        if(threadExecuted == true)
+        {
+            chunkThreadStart = new ThreadStart(LoadChunksAroundPlayer);
+            chunkThread = new Thread(chunkThreadStart);
+            threadExecuted = false;
+
+            chunkThread.Start();
+        }
+    }
+
+    /*
+     * Updates the player position for thread use
+     */
+    public Vector2Int GetPlayerPosition() {
+        return new Vector2Int((int)player.transform.position.x, (int)player.transform.position.y);
     }
 
     /*
      * Loads chunks around the player with an inputed render distance
      */
-    public void LoadChunksAroundPlayer()
-    {
+    public void LoadChunksAroundPlayer() {
         FileInfo[] savedChunks = null;
 
-        int posX = (int)player.transform.position.x;
-        int posY = (int)player.transform.position.y;
+        //int posX = (int)player.transform.position.x;
+        //int posY = (int)player.transform.position.y;
 
+        int posX = playerPos.x;
+        int posY = playerPos.y;
+
+        //Sets the map generator to save the chunks or not
         if (saveMode == true)
         {
-            //Gets all of the saved chunk files
-            DirectoryInfo dir = new DirectoryInfo(Application.persistentDataPath + "/" + worldName);
-            savedChunks = dir.GetFiles("*.dat*");
+            if(Directory.Exists(persistanceDataPath + "/Worlds/" + worldName) && savedChunks == null)
+            {
+                //Gets all of the saved chunk files
+                DirectoryInfo dir = new DirectoryInfo(persistanceDataPath + "/Worlds/" + worldName);
+                savedChunks = dir.GetFiles("*.dat");
+            }
+            else if(!Directory.Exists(persistanceDataPath + "/Worlds/" + worldName))
+            {
+                //Creating Directory
+                Directory.CreateDirectory(persistanceDataPath + "/Worlds/" + worldName);
+            }
         }
 
         for (int y = -renderDistance*chunkSize; y < renderDistance*chunkSize; y+=chunkSize)
@@ -110,55 +243,105 @@ public class MapGenerator : MonoBehaviour
                 //If there are any saved chunks it will try to load them if the map is set to be saved
                 if (savedChunks != null && savedChunks.Length != 0 && saveMode == true)
                 {
+                    bool chunkFound = false;
                     for (int i = 0; i < savedChunks.Length; i++)
                     {
-                        if (savedChunks[i].Name.Contains(newX + "," + newY))
+                        //If the saved chunk name contains the x and y coordinates then load it from file
+                        if (savedChunks[i].Name.Contains("(" + newX + "," + newY + ")") && chunkFound == false)
                         {
-                            LoadChunkAt(newX, newY);
+                            chunkFound = true;
+                            //RequestChunkData(newX, newY);]
+                            SaveLoadData saveLoadData = new SaveLoadData();
+                            LoadChunkAt(saveLoadData.LoadChunk(persistanceDataPath, newX, newY, worldName));
+                            break;
                         }
-                        else
+                        else if (i == savedChunks.Length-1 && chunkFound == false) //If the chunk was not found, create a new one
                         {
-                            MakeChunkAt(newX, newY);
+                            GenerateChunk(newX, newY);
                         }
                     }
                 }
                 else
                 {
-                    MakeChunkAt(newX, newY);
+                    GenerateChunk(newX, newY);
                 }
             }
         }
-        DeleteChunks();
+        //Disables chunks outside the render distance
+        PoolChunks();
+
+        threadExecuted = true;
     }
 
     /*
-     * Makes a new chunk with tiles and objects at desired position
+     * Creates all of the chunks that will be used during the game
      */
-    public void MakeChunkAt(int x, int y)
-    {
-        if (!chunks.ContainsKey(new Vector2(x, y)))
+    private void CreatePooledChunks() {
+        for (int i = 0; i < numPooledChunks; i++)
         {
-            //Creates an empty gameobject chunk to store the tiles
-            var chunkGO = Instantiate(chunkEmptyObject, new Vector3(x, y, 0), Quaternion.identity, transform);
-            var chunk = chunkGO.GetComponent<Chunk>();
-            chunkGO.name = "Chunk(" + x + "," + y + ")";
+            GameObject chunkGameObject = Instantiate(chunkEmptyObject, transform);
+            pooledChunks.Enqueue(chunkGameObject.GetComponent<Chunk>());
 
-            //Fills the chunk class component on the chunk GO
-            chunk.size = chunkSize;
-            chunk.posX = x;
-            chunk.posY = y;
-            chunk.tiles = new List<Tile>();
+            //sets them active to activate start methods
+            chunkGameObject.SetActive(false);
+        }
+    }
 
-            //Creates the tiles on the chunk
-            CreateLayers(chunk);
+    /*
+     * Generates a new chunk at x and y coordinates
+     */
+    public void GenerateChunk(int x, int y) {
+        //Checks if the chunk is already loaded or if the chunk is pooled
+        if (!allChunks.ContainsKey(new Vector2(x, y)))
+        {
+            //Removes the first pooled chunk from the list
+            Chunk currentChunk = pooledChunks.Dequeue();
 
-            //Adds chunk to the total list of chunks
-            chunks.Add(new Vector2(x, y), chunk);
+            //Adds the chunk to the loaded chunks list
+            allChunks.Add(new Vector2(x, y), currentChunk);
 
-            //Saves the chunks
+            currentChunk.SetPosition(x, y);
+            currentChunk.GenerateLayers();
+            chunksAwaitingActivation.Enqueue(currentChunk);
+
             if (saveMode == true)
             {
-                SaveChunks(worldName);
+                SaveLoadData.SaveChunk(persistanceDataPath, x, y, (SaveChunk)currentChunk, worldName);
+            }
+        }
+    }
+
+    /*
+     * Takes a loaded chunk and adds it back to the pool
+     */
+    public void PoolChunks() {
+        //int newX = (int)(player.transform.position.x / chunkSize) * chunkSize;
+        //int newY = (int)(player.transform.position.y / chunkSize) * chunkSize;
+
+        int newX = (int)(playerPos.x / chunkSize) * chunkSize;
+        int newY = (int)(playerPos.y / chunkSize) * chunkSize;
+
+        Queue<Vector2> removeChunks = new Queue<Vector2>();
+
+        //loops through currently active chunks
+        foreach (Chunk chunk in allChunks.Values)
+        {
+            float distance = Vector2.Distance(new Vector2(newX, newY), new Vector2(chunk.chunkPos.x, chunk.chunkPos.y));
+
+            if (distance > deleteDistance * chunkSize)
+            {
+                removeChunks.Enqueue(new Vector2(chunk.chunkPos.x, chunk.chunkPos.y));
+            }
+        }
+
+        if(removeChunks.Count > 0)
+        {
+            while(removeChunks.Count != 0)
+            {
+                Vector2 key = removeChunks.Dequeue();
+
+                chunksAwaitingDeactivation.Enqueue(allChunks[key]);
+                allChunks.Remove(key);
             }
         }
     }
@@ -166,323 +349,140 @@ public class MapGenerator : MonoBehaviour
     /*
      * Loads a new chunk from file with tiles and objects at desired position
      */
-    public void LoadChunkAt(int x, int y)
-    {
-        if (!chunks.ContainsKey(new Vector2(x, y)))
-        {
-            SaveLoadData saveLoadData = new SaveLoadData();
+    public void LoadChunkAt(Chunk savedChunk) {
+        if(savedChunk != null) {
+            if (savedChunk.IsEmpty() == false && !allChunks.ContainsKey(new Vector2(savedChunk.chunkPos.x, savedChunk.chunkPos.y))) {
+                int x = savedChunk.chunkPos.x;
+                int y = savedChunk.chunkPos.y;
 
-            var savedChunk = saveLoadData.LoadChunk(x, y, worldName);
+                //Checks if the chunk is already loaded or if the chunk is pooled
+                if (!allChunks.ContainsKey(new Vector2(x, y))) {
+                    //Removes the first pooled chunk from the list
+                    Chunk dequeuedChunk = pooledChunks.Dequeue();
 
-            if(savedChunk != null)
-            {
-                //Creates an empty gameobject chunk to store the tiles
-                var chunkGO = Instantiate(chunkEmptyObject, new Vector3(x, y, 0), Quaternion.identity, transform);
-                var newChunk = chunkGO.GetComponent<Chunk>();
-                chunkGO.name = "Chunk(" + x + "," + y + ")";
+                    //Adds the chunk to the loaded chunks list
+                    allChunks.Add(new Vector2(x, y), dequeuedChunk);
 
-                //Fills the chunk class component on the chunk GO
-                newChunk.size = savedChunk.size;
-                newChunk.posX = savedChunk.posX;
-                newChunk.posY = savedChunk.posY;
-                newChunk.tiles = savedChunk.tiles;
-                newChunk.objects = savedChunk.objects;
-
-                //Creates the tiles on the chunk
-                CreateLayers(newChunk);
-
-                //Adds chunk to the total list of chunks
-                chunks.Add(new Vector2(x, y), newChunk);
+                    dequeuedChunk.SetPosition(x, y);
+                    LoadTiles(dequeuedChunk, savedChunk);
+                }
             }
         }
     }
 
     /*
-     * Deletes chunks around the player with an inputed delete distance
+     * Loads saved tiles on the chunk
      */
-    public void DeleteChunks()
-    {
-        List<Chunk> deleteChunks = new List<Chunk>(chunks.Values);
+    private void LoadTiles(Chunk inWorldChunk, Chunk savedChunk) {
+        inWorldChunk.updateTiles = new List<Tile>();
 
-        for (int i = 0; i < deleteChunks.Capacity; i++)
-        {
-            int newX = (int)(player.transform.position.x / chunkSize) * chunkSize;
-            int newY = (int)(player.transform.position.y / chunkSize) * chunkSize;
+        for (int i = 0; i < savedChunk.chunkLoadedTiles.Count; i++) {
+            Tile currentTile = inWorldChunk.chunkPooledTiles.Dequeue();
 
-            float distance = Vector2.Distance(new Vector2(newX, newY), deleteChunks[i].gameObject.transform.position);
+            currentTile.SetTile(savedChunk.chunkLoadedTiles[i]);
 
-            if (distance > deleteDistance * chunkSize)
-            {
-                chunks.Remove(deleteChunks[i].gameObject.transform.position);
-                Destroy(deleteChunks[i].gameObject);
-            }
+            //adds the new tile to the loaded list
+            inWorldChunk.chunkLoadedTiles.Add(currentTile);
+            inWorldChunk.updateTiles.Add(currentTile);
         }
+
+        //Spawns objects
+        //LoadObjects(savedChunk);
     }
 
     /*
-     * Creates every layer of tiles changing by their respected heights
+     * Adds a trees and bushes
      */
-    private void CreateLayers(Chunk chunk)
-    {
-        for (int i = 0; i < layerHeights.Length; i++)
-        {
-            CreateTiles(chunk, i);
-        }
-    }
-
-    /*
-     * Creates a new tile object child of the current chunk
-     */
-    private void CreateTiles(Chunk chunk, int layer)
-    {
-        int row = 0;
-        int column = 0;
-
-        for (int i = 0; i < chunkSize * chunkSize; i++)
-        {
-            Tile tile = null;
-
-            //Current tile perlin noise height
-            float currentHeight = (float)perlin.GetValue((row + chunk.posX) * scale, (column + chunk.posY) * scale, 0);
-
-            if (layer == 0)
-            {
-                if (currentHeight - buffer <= layerHeights[layer])
-                {
-                    tile = new Tile(row * column, layer, row + chunk.posX, column + chunk.posY, (Type)layer); //New Tile
-                }
-            }
-            else if (layer == layerHeights.Length - 1)
-            {
-                if(currentHeight + buffer >= layerHeights[layer])
-                {
-                    tile = new Tile(row * column, layer, row + chunk.posX, column + chunk.posY, (Type)layer); //New Tile
-                }
-            }
-            else
-            {
-                if (currentHeight + buffer >= layerHeights[layer] && currentHeight <= layerHeights[layer + 1])
-                {
-                    //Current tile
-                    tile = new Tile(row * column, layer, row + chunk.posX, column + chunk.posY, (Type)layer);
-                }
-            }
-
-            //Only instantiates the tile if there is one present
-            if(tile != null)
-            {
-                //Finds the neighbors of the current tile to auto tile
-                FindNeighbors(chunk, tile, row, column);
-
-                //Fills the tile with the correct sprite
-                FillTile(tile, chunk.transform);
-
-                //Spawns objects
-                AddObjects(chunk, tile, row, column);
-
-                //Adds the current tile to the total tiles on the current chunk
-                chunk.tiles.Add(tile);
-            }
-
-            //Increments to the next column when it reaches the end of the chunksize(row)
-            if (row == chunkSize - 1)
-            {
-                column++;
-                row = 0;
-            }
-            else
-            {
-                row++;
-            }
-        }
-    }
-
-    /*
-     * Counts the amount of neighbors the current tile has (will eventually calculate 8 neighbors)
-     */
-    private void FindNeighbors(Chunk chunk, Tile tile, int row, int column)
-    {
-        float[] heights = new float[4];
-        int[] layers = new int[4];
-
-        //Calculates the neighboring tiles perlin noise height
-        //North
-        heights[0] = (float)perlin.GetValue((row + chunk.posX) * scale, (column + 1 + chunk.posY) * scale, 0);
-        //West
-        heights[1] = (float)perlin.GetValue((row - 1 + chunk.posX) * scale, (column + chunk.posY) * scale, 0);
-        //East
-        heights[2] = (float)perlin.GetValue((row + 1 + chunk.posX) * scale, (column + chunk.posY) * scale, 0);
-        //South
-        heights[3] = (float)perlin.GetValue((row + chunk.posX) * scale, (column - 1 + chunk.posY) * scale, 0);
-
-        //Loops through the layer heights to check what layer the tiles belong to
-        for (int i = 0; i < heights.Length; i++)
-        {
-            //Resets the layer count
-            int currentLayerTotal = 0;
-
-            for (int h = 0; h < layerHeights.Length; h++)
-            {
-                if (h == 0)
-                {
-                    if (heights[i] - buffer <= layerHeights[h])
-                    {
-                        tile.AddNeighbor((Sides)i, layers[i]);
-                    }
-                }
-                else if (h == layerHeights.Length - 1)
-                {
-                    if (heights[i] + buffer >= layerHeights[h])
-                    {
-                        tile.AddNeighbor((Sides)i, layers[i]);
-                    }
-                }
-                else
-                {
-                    if (heights[i] + buffer >= layerHeights[h] && heights[i] <= layerHeights[h + 1])
-                    {
-                        tile.AddNeighbor((Sides)i, layers[i]);
-                    }
-                }
-                currentLayerTotal++;
-                layers[i] = currentLayerTotal;
-            }
-        }
-    }
-
-    /*
-     * Instantiates the tile as a gameobject and assigns the appropriate sprite to the sprite renderer
-     */
-    private void FillTile(Tile tile, Transform chunkPosition)
-    {
-        //Assigns a gameobject tile with a sprite
-        if (tile != null)
-        {
-            Sprite[] sprites = null;
-
-            //Creates a new tile gameobject
-            var go = Instantiate(tilePrefab, new Vector3(tile.tileX, tile.tileY, 0), Quaternion.identity, chunkPosition);
-            go.name = "Tile (" + (tile.tileX) + "," + (tile.tileY) + ")";
-
-            var spriteID = tile.autotileID;
-            var sr = go.GetComponent<SpriteRenderer>();
-            sr.sortingOrder = tile.layer;
-
-            if (tile.type == Type.DarkGrass)
-            {
-                sprites = Resources.LoadAll<Sprite>("Sprites/Tiles/" + darkGrassTexture.name);
-            }
-            else if (tile.type == Type.Grass)
-            {
-                sprites = Resources.LoadAll<Sprite>("Sprites/Tiles/" + grassTexture.name);
-            }
-            else if (tile.type == Type.Dirt)
-            {
-                sprites = Resources.LoadAll<Sprite>("Sprites/Tiles/" + dirtTexture.name);
-            }
-            else if (tile.type == Type.Sand)
-            {
-                sprites = Resources.LoadAll<Sprite>("Sprites/Tiles/" + sandTexture.name);
-                Debug.Log("Sprites/Tiles/" + sandTexture.name);
-            }
-            else
-            {
-                sr.sprite = waterTexture;
-            }
-
-            if (spriteID >= 0 && tile.type != Type.Water && sprites != null)
-            {
-                sr.sprite = sprites[spriteID];
-            }
-        }
-    }
-
-    /*
-     * (WIP) Adds a random object to specific tiles depending on spawn percentage
-     */
-    private void AddObjects(Chunk chunk, Tile tile, int row, int column)
-    {
+    private void AddObjects(Chunk chunk, Tile tile, int row, int column) {
         treePerlin = new Perlin();
         treePerlin.Seed = seed;
         treePerlin.OctaveCount = treeOctaves;
         treePerlin.Frequency = treeFrequency;
         treePerlin.Persistence = treePersistance;
 
-        float currentHeight = (float)treePerlin.GetValue((row + chunk.posX) * scale, (column + chunk.posY) * scale, 0);
+        float currentHeight = (float)treePerlin.GetValue((row + chunk.chunkPos.x) * scale, (column + chunk.chunkPos.y) * scale, 0);
 
-        if (tile.layer >= 3 && currentHeight >= 0.95f && currentHeight <= 1)
-        {
+        if (tile.tileLayer >= 3 && currentHeight >= 0.95f && currentHeight <= 1) {
             //Creates the object in the game world
-            var currentObject = Instantiate(objects[(int)ObjectType.Bush], new Vector3(row + chunk.posX, column + chunk.posY, tile.tileY / 100), Quaternion.identity, chunk.gameObject.transform);
+            var currentObject = Instantiate(objects[(int)ObjectType.Bush], new Vector3(row + chunk.chunkPos.x, column + chunk.chunkPos.y, tile.tilePos.y / 100), Quaternion.identity, chunk.gameObject.transform);
 
             ObjectInfo newObject = currentObject.GetComponent<ObjectInfo>();
-            newObject.posX = row + chunk.posX;
-            newObject.posY = column + chunk.posY;
-            newObject.posZ = tile.tileY / 100;
+            newObject.posX = row + (int)chunk.chunkPos.x;
+            newObject.posY = column + (int)chunk.chunkPos.y;
+            newObject.posZ = tile.tilePos.y / 100;
             newObject.objectType = ObjectType.Bush;
 
-            //Saves the new object
-            SaveObject saveObject = new SaveObject();
-            saveObject.posX = newObject.posX;
-            saveObject.posY = newObject.posY;
-            saveObject.posZ = newObject.posZ;
-            saveObject.objectType = newObject.objectType;
-
-            newObject.savedObject = saveObject;
-
-            chunk.objects.Add(newObject);
+            chunk.chunkObjects.Add(newObject);
         }
-        else if (tile.layer >= 3 && currentHeight >= 0.8f && currentHeight < 0.95f)
-        {
+        else if (tile.tileLayer >= 3 && currentHeight >= 0.8f && currentHeight < 0.95f) {
+            //Picks random number for random tree type
+            int randTree = Random.Range((int)ObjectType.Tree1, (int)ObjectType.Tree2 + 1);
+
             //Creates the object in the game world
-            var currentObject = Instantiate(objects[(int)ObjectType.Tree], new Vector3(row + chunk.posX, column + chunk.posY, tile.tileY / 100), Quaternion.identity, chunk.gameObject.transform);
-
+            var currentObject = Instantiate(objects[randTree], new Vector3(row + chunk.chunkPos.x, column + chunk.chunkPos.y, tile.tilePos.y / 100), Quaternion.identity, chunk.gameObject.transform);
+            
             ObjectInfo newObject = currentObject.GetComponent<ObjectInfo>();
-            newObject.posX = row + chunk.posX;
-            newObject.posY = column + chunk.posY;
-            newObject.posZ = tile.tileY / 100;
-            newObject.objectType = ObjectType.Tree;
+            newObject.posX = row + (int)chunk.chunkPos.x;
+            newObject.posY = column + (int)chunk.chunkPos.y;
+            newObject.posZ = tile.tilePos.y / 100;
+            newObject.objectType = (ObjectType)randTree;
 
-            //Saves the new object
-            SaveObject saveObject = new SaveObject();
-            saveObject.posX = newObject.posX;
-            saveObject.posY = newObject.posY;
-            saveObject.posZ = newObject.posZ;
-            saveObject.objectType = newObject.objectType;
+            chunk.chunkObjects.Add(newObject);
+        }
+    }
 
-            newObject.savedObject = saveObject;
+    /*
+     * Loads objects from file
+     */
+    private void LoadObjects(Chunk chunk) {
+        int row = 0;
+        int column = 0;
 
-            chunk.objects.Add(newObject);
+        for (int i = 0; i < chunk.chunkObjects.Capacity; i++) {
+            GameObject currentObjectGO = Instantiate(objects[(int)chunk.chunkObjects[i].objectType], new Vector3(chunk.chunkObjects[i].posX, chunk.chunkObjects[i].posY, chunk.chunkObjects[i].posZ), Quaternion.identity, chunk.transform);
+            ObjectInfo objectInfo = currentObjectGO.GetComponent<ObjectInfo>();
+
+            objectInfo.posX = chunk.chunkObjects[i].posX;
+            objectInfo.posY = chunk.chunkObjects[i].posY;
+            objectInfo.posZ = chunk.chunkObjects[i].posZ;
+            objectInfo.numHits = chunk.chunkObjects[i].numHits;
+            objectInfo.numHitsTillBreak = chunk.chunkObjects[i].numHitsTillBreak;
+            objectInfo.broken = chunk.chunkObjects[i].broken;
+            objectInfo.objectType = chunk.chunkObjects[i].objectType;
+            objectInfo.savedObject = chunk.chunkObjects[i].savedObject;
+
+            //Increments to the next column when it reaches the end of the chunksize(row)
+            if (row == chunkSize - 1) {
+                column++;
+                row = 0;
+            }
+            else {
+                row++;
+            }
         }
     }
 
     /*
      * Sets the seed to a random integer and generates a new map
      */
-    public void RandomMap()
-    {
+    public int RandomSeed() {
         seed = Random.Range(0, int.MaxValue);
-        perlin.Seed = seed;
-        Debug.Log("Created a random map " + seed);
+
+        return seed;
     }
 
     /*
-     * WIP Saves the visible chunks to file
+     * Saves the visible chunks to file
      */
-    public void SaveChunks(string worldName)
-    {
-        //Gets all of the saved chunk files
-        DirectoryInfo dir = new DirectoryInfo(Application.persistentDataPath);
-        FileInfo[] savedChunks = dir.GetFiles("*.dat*");
-        SaveLoadData saveLoadData = new SaveLoadData();
-
-        foreach (KeyValuePair<Vector2, Chunk> chunk in chunks)
-        {
-            float x = chunk.Key.x;
-            float y = chunk.Key.y;
+    public void SaveChunks(string worldName) {
+        //Loops through each loaded chunk and saves it to file
+        foreach (KeyValuePair<Vector2, Chunk> chunk in allChunks) {
+            int x = (int)chunk.Key.x;
+            int y = (int)chunk.Key.y;
 
             //Saves the current chunk
-            saveLoadData.SaveChunk(x, y, chunk.Value, worldName);
+            SaveLoadData.SaveChunk(persistanceDataPath, x, y, (SaveChunk)chunk.Value, worldName);
         }
     }
+
 }
