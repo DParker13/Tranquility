@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 2a10b1180c19fb84eb3e0742c806b94a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - player: {fileID: 1880987357487756, guid: f76d370dcff85ab408b251dfff18a033, type: 3}
+  - chunkEmptyObject: {fileID: 1878255519537610, guid: f739706b8e658474b91fb7124d83a174,
+      type: 3}
+  - tilePrefab: {fileID: 1892390884300716, guid: 31e316b1a3da0fb458f88b075101d828,
+      type: 3}
+  - darkGrassTexture: {fileID: 2800000, guid: 2cf50d9f947fa6f4089b958e13ff073a, type: 3}
+  - grassTexture: {fileID: 2800000, guid: 2ed09a24ac67e0649818d94d06ef0e53, type: 3}
+  - dirtTexture: {fileID: 2800000, guid: 247291100932ca24ab0afdc41fc91e36, type: 3}
+  - sandTexture: {fileID: 2800000, guid: 77ea6a3198bdd7540abe0127a06ed6c3, type: 3}
+  - waterTexture: {fileID: 21300000, guid: 46abb781250414b4dbebead537130280, type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

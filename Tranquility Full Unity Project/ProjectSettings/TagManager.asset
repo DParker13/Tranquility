@@ -1,0 +1,80 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!78 &1
+TagManager:
+  serializedVersion: 2
+  tags:
+  - PickupRadius
+  - DetectionRadius
+  - GroundObject
+  - StructureObject
+  - PickupObject
+  - Map Generator
+  - New World Screen
+  - Title Screen
+  - Map Name Input
+  - Scene Controller
+  - Slider
+  - Tree
+  - Trunk
+  - Music
+  - Mute
+  - Main Menu Screen
+  - Continue Screen
+  - World List Content
+  - UI Controller
+  layers:
+  - Default
+  - TransparentFX
+  - Ignore Raycast
+  - 
+  - Water
+  - UI
+  - 
+  - 
+  - Foreground
+  - Player
+  - Background
+  - Stuff On Ground
+  - Ground
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  - 
+  m_SortingLayers:
+  - name: Default
+    uniqueID: 0
+    locked: 0
+  - name: Tiles
+    uniqueID: 1831750003
+    locked: 0
+  - name: Ground
+    uniqueID: 714735833
+    locked: 0
+  - name: Stuff On Ground
+    uniqueID: 1741831467
+    locked: 0
+  - name: Background
+    uniqueID: 382515227
+    locked: 0
+  - name: Player
+    uniqueID: 1136097981
+    locked: 0
+  - name: Foreground
+    uniqueID: 1004928345
+    locked: 0

@@ -1,0 +1,80 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1872598382272654
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4395867648687322}
+  - component: {fileID: 5898373318147148814}
+  m_Layer: 0
+  m_Name: MapGen
+  m_TagString: Map Generator
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &4395867648687322
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1872598382272654}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5898373318147148814
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1872598382272654}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2a10b1180c19fb84eb3e0742c806b94a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  player: {fileID: 0}
+  worldName: 
+  chunkEmptyObject: {fileID: 1878255519537610, guid: f739706b8e658474b91fb7124d83a174,
+    type: 3}
+  chunkSize: 10
+  renderDistance: 2
+  deleteDistance: 3
+  saveMode: 0
+  octaves: 8
+  frequency: 3
+  persistance: 0.55
+  scale: 0.01
+  seed: 102938
+  treeOctaves: 6
+  treeFrequency: 4
+  treePersistance: 1
+  objects:
+  - {fileID: 1235670637564484, guid: 5dee78943e1af2143b7f66a6ce4d87a7, type: 3}
+  - {fileID: 1490073365945832, guid: bf1656f4be5a2e84087fd72591a4e6aa, type: 3}
+  - {fileID: 1805763010034162, guid: 2510eb6fed57003419d1e683664a7847, type: 3}
+  waterLevel: -0.8
+  sandLevel: -0.5
+  dirtLevel: -0.2
+  grassLevel: -0
+  darkGrassLevel: 0.2
+  layerHeights: []
+  tilePrefab: {fileID: 1892390884300716, guid: 31e316b1a3da0fb458f88b075101d828, type: 3}
+  darkGrassTexture: {fileID: 2800000, guid: 2cf50d9f947fa6f4089b958e13ff073a, type: 3}
+  grassTexture: {fileID: 2800000, guid: 2ed09a24ac67e0649818d94d06ef0e53, type: 3}
+  dirtTexture: {fileID: 2800000, guid: 247291100932ca24ab0afdc41fc91e36, type: 3}
+  sandTexture: {fileID: 2800000, guid: 77ea6a3198bdd7540abe0127a06ed6c3, type: 3}
+  waterTexture: {fileID: 21300000, guid: 46abb781250414b4dbebead537130280, type: 3}
+  numPooledChunks: 26
+  playerPos: {x: 0, y: 0}
+  threadExecuted: 1
